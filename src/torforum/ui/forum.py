@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import logging
 
 import flet as ft
 
@@ -12,6 +13,8 @@ from torforum.storage import SavedForum
 from torforum.text import plural
 from torforum.ui.base import Screen
 from torforum.ui.widgets import composer, loading, message_box, post_card, when
+
+log = logging.getLogger(__name__)
 
 
 class ForumScreenBase(Screen):
@@ -51,6 +54,7 @@ class ForumScreenBase(Screen):
                 )
             ]
         elif not isinstance(error, ForumError):
+            log.error("Unexpected error on %s", self.route, exc_info=error)
             text = "Что-то пошло не так. Попробуйте ещё раз."
         self.set_body(message_box(text, icon=icon, actions=actions))
 
