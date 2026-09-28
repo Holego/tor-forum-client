@@ -1,0 +1,57 @@
+[project]
+name = "tor-forum-client"
+version = "0.1.0"
+description = "Mobile client for forums hosted on Tor (.onion): read, post and chat through Tor"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Holego" }]
+dependencies = [
+    "flet==1.0.1",
+    "httpx[socks]==0.28.1",
+]
+
+[dependency-groups]
+test = [
+    "pytest>=9.0",
+    "pytest-asyncio>=1.4",
+    "respx>=0.23",
+    "ruff>=0.16",
+]
+dev = [
+    { include-group = "test" },
+    "flet[all]==1.0.1",  # desktop/web runner and the `flet build` CLI
+]
+
+[tool.flet]
+org = "io.github.holego"
+product = "Tor Forum"
+company = "Holego"
+copyright = "Copyright (C) 2026 Holego"
+
+[tool.flet.app]
+path = "src"
+
+[tool.flet.android]
+# One APK per CPU architecture keeps downloads small; most phones need arm64-v8a.
+split_per_abi = true
+adaptive_icon_background = "#7D4698"
+
+[tool.flet.splash]
+color = "#7D4698"
+dark_color = "#3B2148"
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tests"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "ASYNC", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]  # Cyrillic text is intentional
