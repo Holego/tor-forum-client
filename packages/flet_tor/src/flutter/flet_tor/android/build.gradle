@@ -1,0 +1,47 @@
+group = "io.github.holego.flet_tor"
+version = "0.1.0"
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        // Same AGP as the Flet app template, so the two don't clash on the classpath.
+        classpath("com.android.tools.build:gradle:8.11.1")
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+
+android {
+    namespace = "io.github.holego.flet_tor"
+    compileSdk = 36
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        minSdk = 24
+        consumerProguardFiles("consumer-rules.pro")
+    }
+}
+
+dependencies {
+    // Tor compiled for Android, run by TorService inside the app process.
+    // 0.4.9.5 is the newest release whose Java classes target Java 21; later ones need JDK 24 to build.
+    implementation("info.guardianproject:tor-android:0.4.9.5")
+    implementation("info.guardianproject:jtorctl:0.4.5.7")
+    // Pluggable transports for censored networks: Snowflake, obfs4, WebTunnel, meek.
+    implementation("com.netzarchitekten:IPtProxy:5.5.1")
+    implementation("androidx.localbroadcastmanager:localbroadcastmanager:1.1.0")
+}
