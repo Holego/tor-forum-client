@@ -99,6 +99,10 @@ minimal SOCKS5 server (`tests/fake_socks.py`) that records what the client asks 
 uv run flet build apk     # installs Flutter / Android SDK on first run if needed
 ```
 
+Flet builds with JDK 17 (`JAVA_HOME`), and the Tor module additionally needs a JDK 21, found through the
+`JAVA_HOME_21_X64` environment variable (tor-android ships Java 21 classes). Most people don't need to build
+locally at all: download the APK from [Releases](https://github.com/Holego/tor-forum-client/releases).
+
 CI does the same on every push to `main`, then installs the x86_64 APK on an Android emulator, launches it
 and waits until the built-in Tor reports `PROGRESS=100` — so every build is checked to actually connect.
 Pushing a tag publishes the APKs to a GitHub release:
