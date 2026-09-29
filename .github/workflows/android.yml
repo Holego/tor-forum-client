@@ -101,15 +101,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: tor-forum-apk
-          path: apk
-
+      # Checkout first: it cleans the workspace, which would delete an artifact downloaded before it.
       - uses: actions/checkout@v4
         with:
           sparse-checkout: .github/release-notes.md
           sparse-checkout-cone-mode: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tor-forum-apk
+          path: apk
 
       - uses: softprops/action-gh-release@v2
         with:
@@ -117,5 +118,6 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: Tor Forum ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
           files: apk/*.apk
+          fail_on_unmatched_files: true
           body_path: .github/release-notes.md
           generate_release_notes: true
