@@ -8,7 +8,7 @@ import flet as ft
 
 from torforum.api import AuthRequired, ForumError, NotSupported, TorNotRunning
 from torforum.models import Category, Page, Post, Topic
-from torforum.onion import short_host
+from torforum.onion import host_of, is_local_host, short_host
 from torforum.storage import SavedForum
 from torforum.text import plural
 from torforum.ui.base import Screen
@@ -37,12 +37,12 @@ class ForumScreenBase(Screen):
             icon = ft.Icons.WIFI_OFF
             self.page.run_task(self.app.detect_tor)  # keep the status on the start screen truthful
 
-            async def help_and_recheck(_):
-                from torforum.ui.home import TorHelpScreen
+            async def open_connection(_):
+                from torforum.ui.home import ConnectionScreen
 
-                await self.app.open(TorHelpScreen(self.app))
+                await self.app.open(ConnectionScreen(self.app))
 
-            actions.insert(0, ft.OutlinedButton("Как подключить Tor", on_click=help_and_recheck))
+            actions.insert(0, ft.OutlinedButton("Подключение к Tor", on_click=open_connection))
         elif isinstance(error, NotSupported):
             icon = ft.Icons.PUBLIC
             text += "\n\nЭтот сайт можно открыть в Tor Browser."
@@ -57,6 +57,35 @@ class ForumScreenBase(Screen):
             log.error("Unexpected error on %s", self.route, exc_info=error)
             text = "Что-то пошло не так. Попробуйте ещё раз."
         self.set_body(message_box(text, icon=icon, actions=actions))
+
+    async def wait_for_tor(self) -> bool:
+        """On Android, hold the screen on a progress message until the built-in Tor is up."""
+        app = self.app
+        if not app.embedded or app.tor_ready.is_set() or is_local_host(host_of(self.forum.url)):
+            return True
+        text = ft.Text(text_align=ft.TextAlign.CENTER, color=ft.Colors.ON_SURFACE_VARIANT)
+        self.set_body(
+            ft.Container(
+                ft.Column(
+                    [ft.ProgressRing(), text],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=16,
+                ),
+                alignment=ft.Alignment.CENTER,
+                padding=40,
+            )
+        )
+        while not app.tor_ready.is_set():
+            if app.tor_error:
+                self.show_error(TorNotRunning(app.tor_error), self.load)
+                return False
+            if not self.active:
+                return False
+            text.value = f"Подключение к Tor… {app.tor_status.progress}%\n{app.tor_status.phase_name}"
+            self.refresh(text)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(app.tor_ready.wait(), 1.0)
+        return True
 
     async def handle_auth_expired(self) -> None:
         """The token was revoked (logout elsewhere, password change): forget it and ask to log in again."""
@@ -102,6 +131,8 @@ class ForumScreen(ForumScreenBase):
         self.refresh(self.appbar)
 
     async def load(self, _=None) -> None:
+        if not await self.wait_for_tor():
+            return
         self.set_body(loading())
         try:
             client = self.client
@@ -196,6 +227,10 @@ class TopicsScreen(ForumScreenBase):
         )
 
     async def load(self, _=None, *, silent: bool = False) -> None:
+        if silent and not self.app.tor_ready.is_set() and self.app.embedded:
+            return  # Tor is reconnecting; keep what's on screen
+        if not await self.wait_for_tor():
+            return
         if not silent:
             self.set_body(loading())
         try:
@@ -301,6 +336,8 @@ class TopicScreen(ForumScreenBase):
 
     async def load(self, _=None) -> None:
         self.loaded_as_member = self.forum.logged_in
+        if not await self.wait_for_tor():
+            return
         self.set_body(loading())
         try:
             self.topic, page = await asyncio.gather(

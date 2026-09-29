@@ -2,10 +2,18 @@
 
 import flet as ft
 
-from torforum.config import DEFAULT_SOCKS_PORTS, ORBOT_FDROID_URL, ORBOT_URL
+from torforum.bridges import BridgeError, ConnectionMode, parse_bridge_lines
+from torforum.config import DEFAULT_SOCKS_PORTS
 from torforum.onion import AddressError, normalize_address, short_host
 from torforum.storage import SavedForum
 from torforum.ui.base import Screen
+
+MODE_LABELS = {
+    ConnectionMode.AUTO: "автоматически",
+    ConnectionMode.DIRECT: "напрямую",
+    ConnectionMode.SNOWFLAKE: "через Snowflake",
+    ConnectionMode.CUSTOM: "через ваши мосты",
+}
 
 
 class ForumsScreen(Screen):
@@ -22,9 +30,9 @@ class ForumsScreen(Screen):
                 title=ft.Text("Tor Forum"),
                 actions=[
                     ft.IconButton(
-                        ft.Icons.HELP_OUTLINE,
-                        tooltip="Как подключиться к Tor",
-                        on_click=self.open_help,
+                        ft.Icons.VPN_LOCK,
+                        tooltip="Подключение к Tor",
+                        on_click=self.open_connection,
                     )
                 ],
             ),
@@ -53,45 +61,72 @@ class ForumsScreen(Screen):
 
     def render_tor_status(self) -> None:
         app = self.app
-        if app.tor_checking:
-            icon, color = (
-                ft.ProgressRing(width=22, height=22, stroke_width=3),
-                ft.Colors.SURFACE_CONTAINER_HIGH,
-            )
-            title, subtitle, actions = "Ищу Tor…", "Проверяю Orbot / tor на этом устройстве", []
+        actions: list[ft.Control] = []
+        progress = None
+        extra = None
+        if app.embedded and app.tor_error:
+            icon = ft.Icon(ft.Icons.WIFI_OFF, color=ft.Colors.ERROR)
+            color = ft.Colors.ERROR_CONTAINER
+            title, subtitle = "Не удалось подключиться к Tor", app.tor_error
+            actions = [
+                ft.TextButton("Настройки", on_click=self.open_connection),
+                ft.FilledButton("Повторить", on_click=self.recheck_tor),
+            ]
+        elif app.embedded and not app.tor_ready.is_set():
+            status = app.tor_status
+            icon = ft.Icon(ft.Icons.VPN_LOCK, color=ft.Colors.PRIMARY)
+            color = ft.Colors.SURFACE_CONTAINER_HIGH
+            title = f"Подключение к Tor · {status.progress}%"
+            subtitle = status.phase_name
+            if app.tor_mode:
+                subtitle += f" ({MODE_LABELS[app.tor_mode]})"
+            progress = ft.ProgressBar(value=max(status.progress, 2) / 100, border_radius=4)
+            if status.warning:
+                extra = ft.Text(f"Tor: {status.warning}", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+            actions = [ft.TextButton("Настройки подключения", on_click=self.open_connection)]
+        elif app.tor_checking:
+            icon = ft.ProgressRing(width=22, height=22, stroke_width=3)
+            color = ft.Colors.SURFACE_CONTAINER_HIGH
+            title, subtitle = "Ищу Tor…", "Проверяю tor и Tor Browser на этом компьютере"
         elif app.socks_port:
             icon = ft.Icon(ft.Icons.VPN_LOCK, color=ft.Colors.GREEN_700)
             color = ft.Colors.with_opacity(0.12, ft.Colors.GREEN)
             title = "Tor подключён"
-            subtitle = f"Все запросы идут через Tor (SOCKS-порт {app.socks_port})"
-            actions = []
+            if app.embedded:
+                subtitle = f"Встроенный Tor, {MODE_LABELS[app.tor_mode or ConnectionMode.DIRECT]}"
+            else:
+                subtitle = f"Все запросы идут через Tor (SOCKS-порт {app.socks_port})"
         else:
             icon = ft.Icon(ft.Icons.WIFI_OFF, color=ft.Colors.ERROR)
             color = ft.Colors.ERROR_CONTAINER
             title = "Tor не найден"
-            subtitle = "Запустите Orbot и нажмите «Подключиться», затем проверьте снова"
+            subtitle = "Запустите tor или Tor Browser и проверьте снова"
             actions = [
-                ft.TextButton("Как подключить", on_click=self.open_help),
+                ft.TextButton("Подробнее", on_click=self.open_connection),
                 ft.FilledButton("Проверить снова", on_click=self.recheck_tor),
             ]
-        self.tor_card.content = ft.Container(
-            content=ft.Column(
+
+        rows: list[ft.Control] = [
+            ft.Row(
                 [
-                    ft.Row(
-                        [
-                            icon,
-                            ft.Column(
-                                [ft.Text(title, weight=ft.FontWeight.BOLD), ft.Text(subtitle, size=13)],
-                                spacing=2,
-                                expand=True,
-                            ),
-                        ],
-                        spacing=14,
+                    icon,
+                    ft.Column(
+                        [ft.Text(title, weight=ft.FontWeight.BOLD), ft.Text(subtitle, size=13)],
+                        spacing=2,
+                        expand=True,
                     ),
-                    ft.Row(actions, alignment=ft.MainAxisAlignment.END) if actions else ft.Container(),
                 ],
-                spacing=8,
-            ),
+                spacing=14,
+            )
+        ]
+        if progress:
+            rows.append(progress)
+        if extra:
+            rows.append(extra)
+        if actions:
+            rows.append(ft.Row(actions, alignment=ft.MainAxisAlignment.END, wrap=True))
+        self.tor_card.content = ft.Container(
+            content=ft.Column(rows, spacing=8),
             bgcolor=color,
             border_radius=16,
             padding=16,
@@ -99,11 +134,11 @@ class ForumsScreen(Screen):
 
     async def recheck_tor(self, _=None) -> None:
         await self.app.detect_tor()
-        if not self.app.socks_port:
+        if not self.app.embedded and not self.app.socks_port:
             self.app.toast("Tor пока не отвечает")
 
-    async def open_help(self, _=None) -> None:
-        await self.app.open(TorHelpScreen(self.app))
+    async def open_connection(self, _=None) -> None:
+        await self.app.open(ConnectionScreen(self.app))
 
     # --- forums ---
 
@@ -217,10 +252,155 @@ class ForumsScreen(Screen):
         )
 
 
-class TorHelpScreen(Screen):
-    route = "/tor-help"
+class ConnectionScreen(Screen):
+    """How the app reaches Tor: built-in Tor settings on Android, tor / Tor Browser on desktop."""
+
+    route = "/connection"
 
     def build(self) -> ft.View:
+        body = self._embedded_settings() if self.app.embedded else self._desktop_help()
+        return ft.View(
+            route=self.route,
+            appbar=ft.AppBar(title=ft.Text("Подключение к Tor")),
+            controls=[ft.ListView(body, expand=True, padding=16, spacing=12)],
+            padding=0,
+        )
+
+    def on_tor_status(self) -> None:
+        if self.app.embedded:
+            self.status.content = self._status_row()
+            self.refresh(self.status)
+
+    def _status_row(self) -> ft.Control:
+        app = self.app
+        if app.tor_error:
+            icon, color, text = ft.Icons.ERROR_OUTLINE, ft.Colors.ERROR, app.tor_error
+        elif app.tor_ready.is_set():
+            icon, color = ft.Icons.CHECK_CIRCLE, ft.Colors.GREEN_700
+            text = f"Tor подключён ({MODE_LABELS[app.tor_mode or ConnectionMode.DIRECT]})"
+        else:
+            icon, color = ft.Icons.HOURGLASS_TOP, ft.Colors.PRIMARY
+            mode = f", {MODE_LABELS[app.tor_mode]}" if app.tor_mode else ""
+            text = f"{app.tor_status.progress}% — {app.tor_status.phase_name}{mode}"
+        return ft.Row(
+            [ft.Icon(icon, color=color), ft.Text(text, weight=ft.FontWeight.W_600, expand=True)],
+            spacing=10,
+        )
+
+    # --- Android: the Tor built into the app ---
+
+    def _embedded_settings(self) -> list[ft.Control]:
+        state = self.app.state
+        self.status = ft.Container(self._status_row(), padding=16)
+
+        def option(mode: ConnectionMode, title: str, text: str) -> ft.Control:
+            return ft.Container(
+                ft.Column(
+                    [
+                        ft.Radio(value=mode, label=title),
+                        ft.Container(
+                            ft.Text(text, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                            padding=ft.Padding.only(left=48),
+                        ),
+                    ],
+                    spacing=0,
+                ),
+                padding=ft.Padding.only(bottom=6),
+            )
+
+        self.mode = ft.RadioGroup(
+            value=state.connection_mode,
+            on_change=self._mode_changed,
+            content=ft.Column(
+                [
+                    option(
+                        ConnectionMode.AUTO,
+                        "Автоматически (рекомендуется)",
+                        "Сначала напрямую. Если Tor заблокирован провайдером — "
+                        "сам переключится на Snowflake.",
+                    ),
+                    option(
+                        ConnectionMode.DIRECT,
+                        "Напрямую",
+                        "Быстрее всего, если Tor в вашей сети не блокируют.",
+                    ),
+                    option(
+                        ConnectionMode.SNOWFLAKE,
+                        "Snowflake",
+                        "Встроенный мост через добровольцев-посредников. "
+                        "Помогает при блокировках, но медленнее.",
+                    ),
+                    option(
+                        ConnectionMode.CUSTOM,
+                        "Свои мосты (obfs4, WebTunnel)",
+                        "Если ничего не помогает: вставьте свежие мосты ниже.",
+                    ),
+                ],
+                spacing=0,
+            ),
+        )
+        self.bridges = ft.TextField(
+            label="Мосты — по одному в строке",
+            value="\n".join(state.custom_bridges),
+            multiline=True,
+            min_lines=4,
+            max_lines=8,
+            text_size=12,
+            visible=state.connection_mode == ConnectionMode.CUSTOM,
+        )
+        self.bridges_help = ft.Text(
+            "Свежие мосты obfs4 и WebTunnel выдаёт Telegram-бот @GetBridgesBot и сайт bridges.torproject.org "
+            "(его можно открыть в любом браузере). Скопируйте строки целиком.",
+            size=12,
+            color=ft.Colors.ON_SURFACE_VARIANT,
+            visible=state.connection_mode == ConnectionMode.CUSTOM,
+        )
+        return [
+            ft.Text(
+                "Tor встроен в приложение: .onion-сайты открываются без Orbot и Tor Browser, "
+                "а все запросы, включая картинки, идут только через Tor."
+            ),
+            ft.Card(content=self.status),
+            self.mode,
+            self.bridges,
+            self.bridges_help,
+            ft.Row(
+                [ft.FilledButton("Подключиться", icon=ft.Icons.VPN_LOCK, on_click=self.apply)],
+                alignment=ft.MainAxisAlignment.END,
+            ),
+        ]
+
+    def _mode_changed(self, _=None) -> None:
+        custom = self.mode.value == ConnectionMode.CUSTOM
+        self.bridges.visible = self.bridges_help.visible = custom
+        self.refresh(self.bridges, self.bridges_help)
+
+    async def apply(self, _=None) -> None:
+        mode = ConnectionMode(self.mode.value or ConnectionMode.AUTO)
+        bridges: list[str] = []
+        if mode == ConnectionMode.CUSTOM:
+            try:
+                bridges = parse_bridge_lines(self.bridges.value or "")
+            except BridgeError as e:
+                self.bridges.error = str(e)
+                self.refresh(self.bridges)
+                return
+            if not bridges:
+                self.bridges.error = "Вставьте хотя бы один мост"
+                self.refresh(self.bridges)
+                return
+        self.bridges.error = None
+        self.refresh(self.bridges)
+        self.app.state.connection_mode = mode
+        if mode == ConnectionMode.CUSTOM:
+            self.app.state.custom_bridges = bridges
+        await self.app.save_state()
+        self.app.connect_embedded()
+        self.app.toast("Подключаюсь к Tor…")
+
+    # --- desktop: tor or Tor Browser running on the computer ---
+
+    def _desktop_help(self) -> list[ft.Control]:
         self.port_field = ft.TextField(
             label="SOCKS-порт Tor",
             hint_text=" или ".join(map(str, DEFAULT_SOCKS_PORTS)) + " (автоматически)",
@@ -229,80 +409,18 @@ class TorHelpScreen(Screen):
             width=260,
         )
         self.result = ft.Text()
-
-        def step(number: int, title: str, text: str, *actions: ft.Control) -> ft.Control:
-            return ft.Card(
-                content=ft.Container(
-                    ft.Column(
-                        [
-                            ft.Row(
-                                [
-                                    ft.CircleAvatar(content=ft.Text(str(number)), radius=14),
-                                    ft.Text(title, weight=ft.FontWeight.BOLD, expand=True),
-                                ]
-                            ),
-                            ft.Text(text),
-                            ft.Row(list(actions), wrap=True) if actions else ft.Container(),
-                        ],
-                        spacing=10,
-                    ),
-                    padding=16,
-                )
-            )
-
-        return ft.View(
-            route=self.route,
-            appbar=ft.AppBar(title=ft.Text("Подключение к Tor")),
-            controls=[
-                ft.ListView(
-                    [
-                        ft.Text(
-                            "Приложение само не выходит в интернет напрямую: все запросы идут через Tor, "
-                            "который на Android обеспечивает приложение Orbot. Без Tor .onion-сайты "
-                            "не открываются, а приложение ничего не отправит мимо него.",
-                        ),
-                        step(
-                            1,
-                            "Установите Orbot",
-                            "Официальное приложение Tor для Android от Guardian Project.",
-                            ft.OutlinedButton(
-                                "Сайт Orbot",
-                                on_click=lambda _: self.page.run_task(self.app.open_external, ORBOT_URL),
-                            ),
-                            ft.OutlinedButton(
-                                "F-Droid",
-                                on_click=lambda _: self.page.run_task(
-                                    self.app.open_external, ORBOT_FDROID_URL
-                                ),
-                            ),
-                        ),
-                        step(
-                            2,
-                            "Подключитесь",
-                            "Откройте Orbot и нажмите «Подключиться». Если Tor заблокирован провайдером "
-                            "(например, в России), в Orbot откройте выбор подключения и включите мосты: "
-                            "Snowflake, obfs4 или WebTunnel. Свежие мосты выдаёт Telegram-бот @GetBridgesBot "
-                            "и сайт bridges.torproject.org.",
-                        ),
-                        step(
-                            3,
-                            "Вернитесь сюда",
-                            "Приложение найдёт Tor на порту 9050 (Orbot, tor) или 9150 (Tor Browser на "
-                            "компьютере). Если у вас другой порт — укажите его ниже.",
-                        ),
-                        ft.Row([self.port_field], wrap=True),
-                        ft.Row(
-                            [ft.FilledButton("Проверить подключение", on_click=self.check), self.result],
-                            wrap=True,
-                        ),
-                    ],
-                    expand=True,
-                    padding=16,
-                    spacing=12,
-                )
-            ],
-            padding=0,
-        )
+        return [
+            ft.Text(
+                "На компьютере приложение ходит через уже запущенный Tor: службу tor (порт 9050) "
+                "или Tor Browser (порт 9150). Запустите одно из них — приложение найдёт его само. "
+                "Мимо Tor приложение ничего не отправляет."
+            ),
+            ft.Row([self.port_field], wrap=True),
+            ft.Row(
+                [ft.FilledButton("Проверить подключение", on_click=self.check), self.result],
+                wrap=True,
+            ),
+        ]
 
     async def check(self, _=None) -> None:
         raw = (self.port_field.value or "").strip()
@@ -317,5 +435,5 @@ class TorHelpScreen(Screen):
         self.result.value = "Проверяю…"
         self.result.update()
         port = await self.app.detect_tor()
-        self.result.value = f"✅ Tor найден на порту {port}" if port else "❌ Tor не отвечает"
+        self.result.value = f"Tor найден на порту {port}" if port else "Tor не отвечает"
         self.refresh(self.result)

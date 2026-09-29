@@ -26,6 +26,8 @@ class ConversationsScreen(ForumScreenBase):
         )
 
     async def load(self, _=None) -> None:
+        if not await self.wait_for_tor():
+            return
         self.set_body(loading())
         try:
             conversations = await self.client.conversations()
@@ -136,6 +138,8 @@ class ThreadScreen(ForumScreenBase):
         )
 
     async def load(self, _=None) -> None:
+        if not await self.wait_for_tor():
+            return
         self.set_body(loading())
         try:
             messages = await self.client.thread(self.username)

@@ -38,3 +38,22 @@ def test_lookup_helpers():
     assert state.forum(forum.id) is forum
     assert state.find_by_url("http://a.onion") is forum
     assert state.forum("nope") is None
+
+
+async def test_connection_settings_roundtrip_and_old_state_gets_defaults():
+    repo = StateRepository(MemoryStore())
+    bridge = "obfs4 192.0.2.10:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=A iat-mode=0"
+    await repo.save(AppState(forums=[], connection_mode="custom", custom_bridges=[bridge]))
+    loaded = await repo.load()
+    assert (loaded.connection_mode, loaded.custom_bridges) == ("custom", [bridge])
+
+    store = MemoryStore()
+    await store.set(STATE_KEY, '{"forums": [], "socks_port": null}')  # saved by version 0.1
+    old = await StateRepository(store).load()
+    assert (old.connection_mode, old.custom_bridges) == ("auto", [])
+
+
+async def test_unknown_mode_falls_back_to_auto():
+    store = MemoryStore()
+    await store.set(STATE_KEY, '{"forums": [], "connection_mode": "teleport"}')
+    assert (await StateRepository(store).load()).connection_mode == "auto"

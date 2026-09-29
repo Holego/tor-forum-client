@@ -32,9 +32,14 @@ copyright = "Copyright (C) 2026 Holego"
 [tool.flet.app]
 path = "src"
 
+[tool.flet.dev_packages]
+flet-tor = "packages/flet_tor"
+
 [tool.flet.android]
 # One APK per CPU architecture keeps downloads small; most phones need arm64-v8a.
 split_per_abi = true
+# Tor built into the app (packages/flet_tor) — only needed on Android.
+dependencies = ["flet-tor"]
 adaptive_icon_background = "#7D4698"
 
 [tool.flet.splash]

@@ -5,6 +5,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
+from torforum.bridges import ConnectionMode
 from torforum.config import PRESET_FORUMS
 
 STATE_KEY = "torforum.state.v1"
@@ -45,7 +46,9 @@ class SavedForum:
 @dataclass
 class AppState:
     forums: list[SavedForum] = field(default_factory=list)
-    socks_port: int | None = None  # None = find it automatically
+    socks_port: int | None = None  # desktop: None = find tor / Tor Browser automatically
+    connection_mode: str = ConnectionMode.AUTO  # built-in Tor (Android)
+    custom_bridges: list[str] = field(default_factory=list)
 
     def forum(self, forum_id: str) -> SavedForum | None:
         return next((f for f in self.forums if f.id == forum_id), None)
@@ -60,7 +63,13 @@ class AppState:
     def from_json(cls, raw: str) -> "AppState":
         data = json.loads(raw)
         forums = [SavedForum(**f) for f in data.get("forums", [])]
-        return cls(forums=forums, socks_port=data.get("socks_port"))
+        mode = data.get("connection_mode")
+        return cls(
+            forums=forums,
+            socks_port=data.get("socks_port"),
+            connection_mode=mode if mode in set(ConnectionMode) else ConnectionMode.AUTO,
+            custom_bridges=list(data.get("custom_bridges", [])),
+        )
 
     @classmethod
     def first_run(cls) -> "AppState":

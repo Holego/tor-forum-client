@@ -5,7 +5,7 @@ from torforum import __version__
 APP_NAME = "Tor Forum Client"
 USER_AGENT = f"TorForumClient/{__version__}"
 
-# Where a Tor SOCKS proxy usually listens: Orbot / the tor daemon, then Tor Browser (desktop).
+# Desktop: where a Tor SOCKS proxy usually listens — the tor daemon, then Tor Browser.
 DEFAULT_SOCKS_PORTS = (9050, 9150)
 SOCKS_HOST = "127.0.0.1"
 
@@ -24,5 +24,4 @@ READ_TIMEOUT = 90.0
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 IMAGE_CACHE_BYTES = 48 * 1024 * 1024
 
-ORBOT_URL = "https://orbot.app/"
-ORBOT_FDROID_URL = "https://f-droid.org/packages/org.torproject.android/"
+BRIDGES_URL = "https://bridges.torproject.org/"

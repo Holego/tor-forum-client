@@ -1,11 +1,14 @@
 """Application shell: state, Tor detection, forum clients and screen navigation."""
 
+import asyncio
 import logging
 
 import flet as ft
 
 from torforum.api import ForumClient
+from torforum.bridges import ConnectionMode
 from torforum.config import APP_NAME, DEFAULT_SOCKS_PORTS
+from torforum.embedded import BootstrapStatus, EmbeddedTor
 from torforum.media import MediaLoader
 from torforum.storage import AppState, SavedForum, StateRepository
 from torforum.tor import find_socks_port
@@ -38,6 +41,13 @@ class App:
         self.state = AppState()
         self.socks_port: int | None = None
         self.tor_checking = False
+        # Built-in Tor (Android): set up in start(); None on desktop, where tor/Tor Browser is used.
+        self.embedded: EmbeddedTor | None = None
+        self.tor_status = BootstrapStatus()
+        self.tor_mode: ConnectionMode | None = None
+        self.tor_error: str | None = None
+        self.tor_ready = asyncio.Event()
+        self._tor_task: asyncio.Task | None = None
         self.media = MediaLoader(socks_port=None)
         RemoteImage.loader = self.media
         self.clipboard = ft.Clipboard()
@@ -57,6 +67,10 @@ class App:
         page.on_app_lifecycle_state_change = self._on_lifecycle
 
         self.state = await self.repo.load()
+        if page.platform == ft.PagePlatform.ANDROID and not page.web:
+            from flet_tor import TorManager  # only bundled into the Android build
+
+            self.embedded = EmbeddedTor(TorManager())
         page.views.clear()
         await self.open(ForumsScreen(self))
         await self.detect_tor()
@@ -64,6 +78,10 @@ class App:
     # --- Tor ---
 
     async def detect_tor(self) -> int | None:
+        """(Re)connect: start the built-in Tor on Android, look for tor / Tor Browser on desktop."""
+        if self.embedded:
+            self.connect_embedded()
+            return None
         self.tor_checking = True
         self._notify_tor_status()
         ports = [self.state.socks_port] if self.state.socks_port else list(DEFAULT_SOCKS_PORTS)
@@ -78,6 +96,49 @@ class App:
         self._notify_tor_status()
         return port
 
+    def connect_embedded(self) -> None:
+        """Start the built-in Tor with the saved connection settings, replacing any attempt in progress."""
+        if self._tor_task and not self._tor_task.done():
+            self._tor_task.cancel()
+        self.tor_ready.clear()
+        self.tor_error = None
+        self.tor_status = BootstrapStatus()
+        self._tor_task = asyncio.ensure_future(self._run_embedded())
+
+    async def _run_embedded(self) -> None:
+        assert self.embedded
+        mode = ConnectionMode(self.state.connection_mode)
+        try:
+            port = await self.embedded.connect(mode, self.state.custom_bridges, self._on_bootstrap)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # the plugin's error text, or a channel failure
+            log.exception("Built-in Tor failed")
+            self.tor_error = str(e) or "Не удалось запустить Tor"
+            self._notify_tor_status()
+            return
+        if port != self.socks_port:
+            await self._close_clients()
+            await self.media.set_socks_port(port)
+            self.socks_port = port
+        log.info("Tor ready on SOCKS port %s (%s)", port, self.tor_mode)
+        self.tor_ready.set()
+        self._notify_tor_status()
+
+    def _on_bootstrap(self, status: BootstrapStatus, mode: ConnectionMode) -> None:
+        changed = (status.progress, status.tag, mode) != (
+            self.tor_status.progress,
+            self.tor_status.tag,
+            self.tor_mode,
+        )
+        self.tor_status, self.tor_mode = status, mode
+        if changed:
+            self._notify_tor_status()
+
+    @property
+    def tor_connecting(self) -> bool:
+        return bool(self.embedded) and not self.tor_ready.is_set() and not self.tor_error
+
     def _notify_tor_status(self) -> None:
         for screen in self.screens:
             handler = getattr(screen, "on_tor_status", None)
@@ -85,8 +146,13 @@ class App:
                 handler()
 
     async def _on_lifecycle(self, e: ft.AppLifecycleStateChangeEvent) -> None:
-        # Coming back from Orbot after tapping "Connect": look for Tor again.
-        if e.state == ft.AppLifecycleState.RESUME and self.socks_port is None and not self.tor_checking:
+        # Desktop: tor / Tor Browser may have been started while the app was in the background.
+        if (
+            not self.embedded
+            and e.state == ft.AppLifecycleState.RESUME
+            and self.socks_port is None
+            and not self.tor_checking
+        ):
             await self.detect_tor()
 
     # --- forums ---

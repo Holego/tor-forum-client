@@ -1,4 +1,4 @@
-"""Finding the local Tor SOCKS proxy (Orbot on Android, tor / Tor Browser on desktop)."""
+"""Finding a Tor SOCKS proxy already running on the computer (tor or Tor Browser)."""
 
 import asyncio
 import contextlib

@@ -83,7 +83,7 @@ def build_http_client(
     if is_local_host(host):
         proxy = None
     elif socks_port is None:
-        raise TorNotRunning("Tor не запущен — запустите Orbot (или tor) и попробуйте снова")
+        raise TorNotRunning("Нет подключения к Tor — проверьте настройки подключения")
     else:
         proxy = socks_proxy_url(socks_port, isolation_key=host)
     return httpx.AsyncClient(
@@ -129,7 +129,7 @@ class ForumClient:
             ) from e
         except httpx.ConnectError as e:
             if self._via_tor:
-                raise TorNotRunning("Не удалось подключиться к Tor — проверьте, что Orbot запущен") from e
+                raise TorNotRunning("Tor не отвечает — проверьте подключение к Tor") from e
             raise ForumUnreachable("Сайт не отвечает") from e
         except httpx.TimeoutException as e:
             raise ForumUnreachable(
