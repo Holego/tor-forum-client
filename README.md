@@ -4,35 +4,30 @@
 [![Android APK](https://github.com/Holego/tor-forum-client/actions/workflows/android.yml/badge.svg)](https://github.com/Holego/tor-forum-client/actions/workflows/android.yml)
 
 A mobile client for forums hosted as Tor onion services, written in Python.
-Read topics, reply, start threads and chat in private messages — every byte goes
-through Tor, and images/GIFs linked in posts are fetched through Tor as well.
+Tor is built into the app — no Orbot or Tor Browser needed, and it can connect through
+Snowflake, obfs4 or WebTunnel bridges where Tor is blocked. Read topics, reply, start threads and
+chat in private messages; images/GIFs linked in posts are fetched through Tor as well.
 
 Works with any forum that implements the small [Tor Forum API](#forum-api)
 (for example [Jo Pirat Forum](https://github.com/Holego/jo-pirat-forum), which comes preset).
 
 <p>
-  <img src="docs/screenshots/1-home.png" width="19%" alt="Forums and Tor status">
+  <img src="docs/screenshots/1-home.png" width="19%" alt="Built-in Tor bootstrapping">
   <img src="docs/screenshots/2-forum.png" width="19%" alt="Categories">
   <img src="docs/screenshots/3-topic.png" width="19%" alt="Topic with an image loaded through Tor">
   <img src="docs/screenshots/4-messages.png" width="19%" alt="Private messages with a GIF">
-  <img src="docs/screenshots/5-tor-help.png" width="19%" alt="Connecting to Tor">
+  <img src="docs/screenshots/5-connection.png" width="19%" alt="Connection settings and bridges">
 </p>
-
-## Коротко по-русски
-
-1. Установите [Orbot](https://orbot.app/) (Tor для Android), откройте и нажмите «Подключиться».
-   Если Tor заблокирован провайдером — включите в Orbot мосты (Snowflake, obfs4 или WebTunnel;
-   свежие мосты выдаёт Telegram-бот @GetBridgesBot).
-2. Скачайте APK из [Releases](https://github.com/Holego/tor-forum-client/releases):
-   для большинства телефонов нужен файл `arm64-v8a`.
-3. Откройте **Tor Forum** — Jo Pirat Forum уже в списке. Другой форум добавляется кнопкой «+ Форум»
-   по .onion-адресу.
 
 ## Features
 
-- **Tor only, no fallback.** Remote sites are reachable exclusively through the local Tor SOCKS proxy
-  (Orbot on Android, `tor` or Tor Browser on desktop, detected automatically). If Tor is down the app
-  shows how to start it — it never retries without Tor.
+- **Tor built in.** On Android the app runs Tor itself ([tor-android](https://github.com/guardianproject/tor-android))
+  and shows bootstrap progress; on desktop it uses a running `tor` or Tor Browser. Remote sites are only ever
+  reached through Tor — there is no fallback to a direct connection.
+- **Works where Tor is blocked.** Connection modes: automatic (direct, switching to Snowflake if Tor looks
+  blocked), direct, Snowflake, or your own obfs4/WebTunnel bridges — pluggable transports come from
+  [IPtProxy](https://github.com/tladesignz/IPtProxy). Bridges are changed at runtime over Tor's control
+  connection, like Tor Browser does.
 - **Forums:** categories, topics (pinned/locked), paginated posts, replying, new topics, login/registration,
   private messages with unread badges.
 - **Media by link:** direct links to images/GIFs in posts are downloaded through Tor and shown inline;
@@ -45,13 +40,24 @@ Works with any forum that implements the small [Tor Forum API](#forum-api)
 
 ```mermaid
 flowchart LR
-    UI["Flet UI (screens)"] --> API["ForumClient<br/>httpx, async"]
-    UI --> Media["MediaLoader<br/>size cap + LRU cache"]
-    API -- "SOCKS5 · isolation per forum" --> Tor[("Orbot / tor<br/>127.0.0.1:9050")]
-    Media -- "SOCKS5 · isolation per host" --> Tor
+    subgraph app["Android app"]
+        UI["Flet UI (Python)"] --> API["ForumClient<br/>httpx, async"]
+        UI --> Media["MediaLoader<br/>size cap + LRU cache"]
+        UI -- "TorManager service<br/>(Python → Dart → Java)" --> Tor[("Tor · TorService<br/>SOCKS 127.0.0.1")]
+        Tor -. "bridges" .-> PT["IPtProxy<br/>Snowflake · obfs4 · WebTunnel"]
+        API -- "SOCKS5 · isolation per forum" --> Tor
+        Media -- "SOCKS5 · isolation per host" --> Tor
+    end
     Tor --> Forum[".onion forum<br/>/api/"]
     Tor --> Hosts["image hosts"]
 ```
+
+`packages/flet_tor` is a small Flet extension: a Python `Service`, a Dart `FletService` and an Android
+plugin in Java. Tor starts with `DisableNetwork 1` and a `ClientTransportPlugin` for every IPtProxy
+transport; connecting is a `SETCONF UseBridges/Bridge …` + `DisableNetwork 0` over the control
+connection, so switching bridges never needs a Tor restart. The Python side (`torforum/embedded.py`)
+follows `status/bootstrap-phase` and, in automatic mode, falls back to Snowflake when a direct
+connection doesn't get past 25 % within 40 s.
 
 Privacy details that are enforced in code and covered by tests:
 
@@ -73,13 +79,14 @@ uv run flet run src/main.py       # desktop window
 uv run flet run --web src/main.py # or in a browser
 ```
 
-Start Tor first (`tor`, or Tor Browser which listens on 9150). To work on the UI against a forum running
-on your own machine, add `http://127.0.0.1:8000` as a forum — local addresses don't need Tor.
+On desktop, start Tor first (`tor`, or Tor Browser which listens on 9150); the built-in Tor is Android-only.
+To work on the UI against a forum running on your own machine, add `http://127.0.0.1:8000` as a forum —
+local addresses don't need Tor.
 
 ## Tests
 
 ```bash
-uv run pytest     # 80+ tests: address parsing, SOCKS detection, routing through a fake Tor, API client, media
+uv run pytest     # 100+ tests: addresses, bridges, bootstrap/fallback logic, routing through a fake Tor, API, media
 uv run ruff check . && uv run ruff format --check .
 ```
 
@@ -92,8 +99,9 @@ minimal SOCKS5 server (`tests/fake_socks.py`) that records what the client asks 
 uv run flet build apk     # installs Flutter / Android SDK on first run if needed
 ```
 
-CI does the same on every push to `main` (APK attached to the workflow run) and publishes the APKs to
-a GitHub release when you push a tag:
+CI does the same on every push to `main`, then installs the x86_64 APK on an Android emulator, launches it
+and waits until the built-in Tor reports `PROGRESS=100` — so every build is checked to actually connect.
+Pushing a tag publishes the APKs to a GitHub release:
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
@@ -143,14 +151,17 @@ src/
     media.py            image downloads through Tor, size cap, LRU cache
     storage.py          saved forums and logins (SharedPreferences)
     text.py             link splitting, relative time, Russian plurals
-    ui/                 Flet screens: home, forum, account, messages
+    bridges.py          connection modes, built-in Snowflake bridges, bridge-line validation
+    embedded.py         drives the built-in Tor through bootstrap, auto-fallback to Snowflake
+    ui/                 Flet screens: home, connection, forum, account, messages
+packages/flet_tor/      Flet extension: Tor + pluggable transports inside the Android app (Python/Dart/Java)
 tests/                  pytest suite, fake SOCKS5 server
 ```
 
 ## Stack
 
 Python 3.12 · [Flet](https://flet.dev) (Flutter UI from Python) · [httpx](https://www.python-httpx.org/)
-with SOCKS · pytest / pytest-asyncio / respx · ruff · uv · GitHub Actions
+with SOCKS · tor-android · IPtProxy · pytest / pytest-asyncio / respx · ruff · uv · GitHub Actions
 
 ## License
 
