@@ -42,6 +42,10 @@ split_per_abi = true
 dependencies = ["flet-tor"]
 adaptive_icon_background = "#7D4698"
 
+[tool.flet.android.gradle_properties]
+# JDK 21 for compiling flet_tor (see its build.gradle); the variable is set by actions/setup-java.
+"org.gradle.java.installations.fromEnv" = "JAVA_HOME_21_X64"
+
 [tool.flet.splash]
 color = "#7D4698"
 dark_color = "#3B2148"

@@ -36,6 +36,15 @@ android {
     }
 }
 
+// tor-android's classes are Java 21 bytecode, while `flet build` runs Gradle on JDK 17, whose
+// javac can't read them. Compile this module with a JDK 21 toolchain (output still targets 17).
+// Gradle finds it through org.gradle.java.installations.fromEnv (see the app's pyproject.toml).
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
 dependencies {
     // Tor compiled for Android, run by TorService inside the app process.
     // 0.4.9.5 is the newest release whose Java classes target Java 21; later ones need JDK 24 to build.
